@@ -146,6 +146,12 @@ public:
 private:
   bool loadParameters(const ros::NodeHandle n);
   /**
+   * \brief Callback for updating joint states using gazebo
+   * @param msg joint state msg 
+   */
+  void simJointStatesPubCallback(const sensor_msgs::JointState::ConstPtr& msg);
+
+  /**
    * \brief Callback for sending an angular command to the arm
    * @param msg angular command and info
    */
@@ -229,8 +235,10 @@ private:
   ros::Publisher cartesianCmdPublisher; //!< publisher for Cartesian arm commands
   ros::Publisher angularCmdPublisher; //!< publisher for angular arm commands
   ros::Publisher armHomedPublisher; //!< publisher for when the arm completes a kinova api home arm action
+  ros::Publisher angCmdSimPublisher; //!< publisher for simulation argular arm commands
   ros::Subscriber cartesianCmdSubscriber; //!< subscriber for Cartesian arm commands
   ros::Subscriber angularCmdSubscriber; //!< subscriber for angular arm commands
+  ros::Subscriber joint_state_sub; //!< subscriber for joint states from simulation
 
   // Services
   ros::ServiceClient jaco_fk_client; //!< forward kinematics client
@@ -271,6 +279,8 @@ private:
   int           num_fingers_;
   int           num_joints_;
   bool          kinova_gripper_;
+  bool          sim_flag_;
+  bool          home_arm_;
 
   std::vector<std::string> joint_names;
   std::vector<double>      joint_pos_;
