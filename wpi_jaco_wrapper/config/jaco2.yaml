@@ -15,7 +15,7 @@ wpi_jaco:
   gripper_closed: 65.0
 
   # For calculating splines in the joint trajectory
-  max_curvature: 20.0
+  max_curvature: 40.0
 
   # Maximal speed of the fingers while opening/closing
   max_speed_finger: 30.0
