@@ -2,7 +2,7 @@
   <arg name="arm_name" default="jaco2" />
   <arg name="home_arm_on_init" default="false" />
   <arg name="kinova_gripper" default="false" />
-  <arg name="sim" default="true" />
+  <arg name="sim" default="false" />
 
   <rosparam command="load" file="$(find wpi_jaco_wrapper)/config/$(arg arm_name).yaml"/>
   
