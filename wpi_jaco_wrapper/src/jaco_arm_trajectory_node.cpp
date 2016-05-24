@@ -282,27 +282,62 @@ static inline double nearest_equivalent(double desired, double current)
 
 void JacoArmTrajectoryController::execute_trajectory(const control_msgs::FollowJointTrajectoryGoalConstPtr &goal)
 {
+
+  // Check if the arm is initialized - return if not
   if ( not arm_initialized )
   {
     return; // The arm is not fully initialized yet
   }
-  //cancel check
+
+  // Check if the virtual estop has been enabled
   if (eStopEnabled)
   {
+    // Clear all commands and exit
     control_msgs::FollowJointTrajectoryResult result;
     result.error_code = control_msgs::FollowJointTrajectoryResult::PATH_TOLERANCE_VIOLATED;
     trajectory_server_->setSucceeded(result);
     return;
   }
 
+  // Check if we're in simulation
+  if (sim_flag_)
+  {
+
+    ROS_INFO("Received Command");
+
+    // Setup msg JointTrajectory for std gazebo ros controller
+    // Populate JointTrajectory with the points in the current goal
+    trajectory_msgs::JointTrajectory jtm;
+    trajectory_msgs::JointTrajectoryPoint jtp;
+    jtm.joint_names = goal->trajectory.joint_names;
+    jtm.points = goal->trajectory.points;
+
+    // Publish out trajaectory points listed in the goal
+    angCmdSimPublisher.publish(jtm);
+
+    // Tell the server we sent off the trajectory - Might need to remove?
+    ROS_INFO("Trajectory Control Complete.");
+    control_msgs::FollowJointTrajectoryResult result;
+    result.error_code = control_msgs::FollowJointTrajectoryResult::SUCCESSFUL;
+    trajectory_server_->setSucceeded(result);
+
+    return; // Never go to the real arm if we're in sim
+  }
+
+  
+  // Grab the lock for the real arm
   {
     boost::recursive_mutex::scoped_lock lock(api_mutex);
     EraseAllTrajectories();
   }
 
+  // Update the joint states of the real robot
   update_joint_states();
+
+  // Storage for current joint position
   double current_joint_pos[NUM_JACO_JOINTS];
 
+  // Read position data from real arm
   AngularPosition position_data;
   {
     boost::recursive_mutex::scoped_lock lock(api_mutex);
@@ -314,6 +349,7 @@ void JacoArmTrajectoryController::execute_trajectory(const control_msgs::FollowJ
   current_joint_pos[3] = position_data.Actuators.Actuator4 * DEG_TO_RAD;
   current_joint_pos[4] = position_data.Actuators.Actuator5 * DEG_TO_RAD;
   current_joint_pos[5] = position_data.Actuators.Actuator6 * DEG_TO_RAD;
+  
 
   //initialize trajectory point
   TrajectoryPoint trajPoint;
@@ -430,6 +466,33 @@ void JacoArmTrajectoryController::execute_smooth_trajectory(const control_msgs::
     smooth_trajectory_server_->setSucceeded(result);
     return;
   }
+
+  // Check if we're in simulation
+  if (sim_flag_)
+  {
+
+    ROS_INFO("WARNING: Smooth control is not supported in simulation currently - execute as trajecoty as is");
+
+    // Setup msg JointTrajectory for std gazebo ros controller
+    // Populate JointTrajectory with the points in the current goal
+    trajectory_msgs::JointTrajectory jtm;
+    trajectory_msgs::JointTrajectoryPoint jtp;
+    jtm.joint_names = goal->trajectory.joint_names;
+    jtm.points = goal->trajectory.points;
+
+    // Publish out trajaectory points listed in the goal
+    angCmdSimPublisher.publish(jtm);
+
+    // Tell the server we sent off the trajectory - Might need to remove?
+    ROS_INFO("Trajectory Control Complete.");
+    control_msgs::FollowJointTrajectoryResult result;
+    result.error_code = control_msgs::FollowJointTrajectoryResult::SUCCESSFUL;
+    smooth_trajectory_server_->setSucceeded(result);
+
+    return; // Never go to the real arm if we're in sim
+  }
+
+  // Otherwise we are on the real arm
 
   {
     boost::recursive_mutex::scoped_lock lock(api_mutex);
@@ -1102,18 +1165,14 @@ void JacoArmTrajectoryController::simJointStatesPubCallback(const sensor_msgs::J
   /* Assuming this mapping
   34     joint_names.push_back(side_ + "_shoulder_pan_joint"); [0]
   35     joint_names.push_back(side_ + "_shoulder_lift_joint"); [1]
-  36     joint_names.push_back(side_ + "_jaco_elbow_joint");    [2]
-  37     joint_names.push_back(side_ + "_jaco_wrist_1_joint");  [3]
-  38     joint_names.push_back(side_ + "_jaco_wrist_2_joint");  [4]
-  39     joint_names.push_back(side_ + "_jaco_wrist_3_joint");  [5]
+  36     joint_names.push_back(side_ + "_elbow_joint");    [2]
+  37     joint_names.push_back(side_ + "_wrist_1_joint");  [3]
+  38     joint_names.push_back(side_ + "_wrist_2_joint");  [4]
+  39     joint_names.push_back(side_ + "_wrist_3_joint");  [5]
 
 
   // Store the current joint position (identicle to update)
-name: ['linear_joint', 'pan_joint', 'right_elbow_joint', 'right_robotiq_85_left_knuckle_joint', 'right_shoulder_lift_joint', 'right_shoulder_pan_joint', 'right_wrist_1_joint', 'right_wrist_2_joint', 'right_wrist_3_joint', 'tilt_joint']
-position: [0.006755840287482287, 2.264239689075964e-06, 0.004943710744846008, 8.628406326405269e-05, 0.00020035891942349338, -0.011874748982012129, 0.05837930219690346, -0.18426093476566052, -0.00105215848086182, -5.6531992261632524e-05]
-velocity: [0.0080182222286578, -5.211224322498485e-06, 0.017682163543811004, 0.03074174631667581, 0.0030022760534728233, -0.08477686188577488, 0.10498976973077462, -0.7487747109197295, -0.004963252220800962, 4.813153678558113e-05]
-effort: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-
+  name: ['linear_joint', 'pan_joint', 'right_elbow_joint', 'right_robotiq_85_left_knuckle_joint', 'right_shoulder_lift_joint', 'right_shoulder_pan_joint', 'right_wrist_1_joint', 'right_wrist_2_joint', 'right_wrist_3_joint', 'tilt_joint']
     shoulder_pan_joint -> 5
     shoulder_lift_joint -> 4
     elbow_joint -> 2
