@@ -279,7 +279,9 @@ static inline double nearest_equivalent(double desired, double current)
 /*****************************************/
 /**********  Trajectory Control **********/
 /*****************************************/
-
+/**
+* This function sends commands without splining - causes jerky movements
+**/
 void JacoArmTrajectoryController::execute_trajectory(const control_msgs::FollowJointTrajectoryGoalConstPtr &goal)
 {
 
@@ -303,7 +305,7 @@ void JacoArmTrajectoryController::execute_trajectory(const control_msgs::FollowJ
   if (sim_flag_)
   {
 
-    ROS_INFO("Received Command");
+    ROS_WARN("Warning: Simulation does not support this controller: sending trajectory as is. Not guarantee to act like real robot");
 
     // Setup msg JointTrajectory for std gazebo ros controller
     // Populate JointTrajectory with the points in the current goal
@@ -324,7 +326,6 @@ void JacoArmTrajectoryController::execute_trajectory(const control_msgs::FollowJ
     return; // Never go to the real arm if we're in sim
   }
 
-  
   // Grab the lock for the real arm
   {
     boost::recursive_mutex::scoped_lock lock(api_mutex);
@@ -455,7 +456,9 @@ void JacoArmTrajectoryController::execute_trajectory(const control_msgs::FollowJ
 /*****************************************/
 /*****  Smoothed Trajectory Control ******/
 /*****************************************/
-
+/** 
+* Not used anymore
+**/
 void JacoArmTrajectoryController::execute_smooth_trajectory(const control_msgs::FollowJointTrajectoryGoalConstPtr &goal)
 {
   //cancel check
@@ -471,7 +474,7 @@ void JacoArmTrajectoryController::execute_smooth_trajectory(const control_msgs::
   if (sim_flag_)
   {
 
-    ROS_INFO("WARNING: Smooth control is not supported in simulation currently - execute as trajecoty as is");
+    ROS_INFO("WARNING: Smooth control is not supported in simulation currently - execute as trajectory as is");
 
     // Setup msg JointTrajectory for std gazebo ros controller
     // Populate JointTrajectory with the points in the current goal
@@ -664,6 +667,10 @@ void JacoArmTrajectoryController::execute_smooth_trajectory(const control_msgs::
   smooth_trajectory_server_->setSucceeded(result);
 }
 
+/**
+* Trajectory execution that actually splines the joints together to send to the robot arm
+* This is the command you will mostly likely want to use
+**/
 void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::FollowJointTrajectoryGoalConstPtr &goal)
 {
   //check for cancel
@@ -755,14 +762,16 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
   float prevError[NUM_JACO_JOINTS] = {0};
   float currentPoint;
   double current_joint_pos[NUM_JACO_JOINTS];
+
+  // Setup storage for the real-robot trajectories
   AngularPosition position_data;
   TrajectoryPoint trajPoint;
   trajPoint.InitStruct();
   trajPoint.Position.Type = ANGULAR_VELOCITY;
   trajPoint.Position.HandMode = HAND_NOMOVEMENT;
 
-  ros::Rate rate(600);
-
+  ros::Rate rate(600); // Loop running at 600 Hz
+  // Actual control loop for real-robot arm
   while (!trajectoryComplete)
   {
     if (eStopEnabled)
@@ -776,14 +785,18 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
     //check for preempt requests from clients
     if (smooth_joint_trajectory_server_->isPreemptRequested())
     {
-      //stop gripper control
-      trajPoint.Position.Actuators.Actuator1 = 0.0;
-      trajPoint.Position.Actuators.Actuator2 = 0.0;
-      trajPoint.Position.Actuators.Actuator3 = 0.0;
-      trajPoint.Position.Actuators.Actuator4 = 0.0;
-      trajPoint.Position.Actuators.Actuator5 = 0.0;
-      trajPoint.Position.Actuators.Actuator6 = 0.0;
-      executeAngularTrajectoryPoint(trajPoint, true);
+
+      // check for sim - sim doesn't stop the gripper here
+      if(!sim_flag_){
+        //stop gripper control
+        trajPoint.Position.Actuators.Actuator1 = 0.0;
+        trajPoint.Position.Actuators.Actuator2 = 0.0;
+        trajPoint.Position.Actuators.Actuator3 = 0.0;
+        trajPoint.Position.Actuators.Actuator4 = 0.0;
+        trajPoint.Position.Actuators.Actuator5 = 0.0;
+        trajPoint.Position.Actuators.Actuator6 = 0.0;
+        executeAngularTrajectoryPoint(trajPoint, true);
+      }
 
       //preempt action server
       smooth_joint_trajectory_server_->setPreempted();
@@ -796,18 +809,25 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
     t = ros::Time::now().toSec() - startTime;
     if (t > timePoints.at(timePoints.size() - 1))
     {
-      //use final trajectory point as the goal to calculate error until the error
-      //is small enough to be considered successful
-      {
-        boost::recursive_mutex::scoped_lock lock(api_mutex);
-        GetAngularPosition(position_data);
+
+      // Check where to get current joints from
+      if(sim_flag_){
+        // Copy from joint_state publisher to current joints
+        std::copy(joint_pos_.begin(), joint_pos_.end(), current_joint_pos);
+      } else {
+        //use final trajectory point as the goal to calculate error until the error
+        //is small enough to be considered successful
+        {
+          boost::recursive_mutex::scoped_lock lock(api_mutex);
+          GetAngularPosition(position_data);
+        }
+        current_joint_pos[0] = position_data.Actuators.Actuator1 * DEG_TO_RAD;
+        current_joint_pos[1] = position_data.Actuators.Actuator2 * DEG_TO_RAD;
+        current_joint_pos[2] = position_data.Actuators.Actuator3 * DEG_TO_RAD;
+        current_joint_pos[3] = position_data.Actuators.Actuator4 * DEG_TO_RAD;
+        current_joint_pos[4] = position_data.Actuators.Actuator5 * DEG_TO_RAD;
+        current_joint_pos[5] = position_data.Actuators.Actuator6 * DEG_TO_RAD;
       }
-      current_joint_pos[0] = position_data.Actuators.Actuator1 * DEG_TO_RAD;
-      current_joint_pos[1] = position_data.Actuators.Actuator2 * DEG_TO_RAD;
-      current_joint_pos[2] = position_data.Actuators.Actuator3 * DEG_TO_RAD;
-      current_joint_pos[3] = position_data.Actuators.Actuator4 * DEG_TO_RAD;
-      current_joint_pos[4] = position_data.Actuators.Actuator5 * DEG_TO_RAD;
-      current_joint_pos[5] = position_data.Actuators.Actuator6 * DEG_TO_RAD;
 
       totalError = 0;
       for (unsigned int i = 0; i < NUM_JACO_JOINTS; i++)
@@ -820,13 +840,16 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
 
       if (totalError < .03)
       {
-        trajPoint.Position.Actuators.Actuator1 = 0.0;
-        trajPoint.Position.Actuators.Actuator2 = 0.0;
-        trajPoint.Position.Actuators.Actuator3 = 0.0;
-        trajPoint.Position.Actuators.Actuator4 = 0.0;
-        trajPoint.Position.Actuators.Actuator5 = 0.0;
-        trajPoint.Position.Actuators.Actuator6 = 0.0;
-        executeAngularTrajectoryPoint(trajPoint, true);
+        if (!sim_flag_){ // stop gripper?
+          trajPoint.Position.Actuators.Actuator1 = 0.0;
+          trajPoint.Position.Actuators.Actuator2 = 0.0;
+          trajPoint.Position.Actuators.Actuator3 = 0.0;
+          trajPoint.Position.Actuators.Actuator4 = 0.0;
+          trajPoint.Position.Actuators.Actuator5 = 0.0;
+          trajPoint.Position.Actuators.Actuator6 = 0.0;
+          executeAngularTrajectoryPoint(trajPoint, true);
+        }
+
         trajectoryComplete = true;
         ROS_INFO("Trajectory complete!");
         break;
@@ -834,17 +857,23 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
     }
     else
     {
-      //calculate error
-      {
-        boost::recursive_mutex::scoped_lock lock(api_mutex);
-        GetAngularPosition(position_data);
+      // Check where to get current joints from
+      if(sim_flag_){
+        std::copy(joint_pos_.begin(), joint_pos_.end(), current_joint_pos);
+      } else {
+        //calculate error
+        {
+          boost::recursive_mutex::scoped_lock lock(api_mutex);
+          GetAngularPosition(position_data);
+        }
+        current_joint_pos[0] = position_data.Actuators.Actuator1 * DEG_TO_RAD;
+        current_joint_pos[1] = position_data.Actuators.Actuator2 * DEG_TO_RAD;
+        current_joint_pos[2] = position_data.Actuators.Actuator3 * DEG_TO_RAD;
+        current_joint_pos[3] = position_data.Actuators.Actuator4 * DEG_TO_RAD;
+        current_joint_pos[4] = position_data.Actuators.Actuator5 * DEG_TO_RAD;
+        current_joint_pos[5] = position_data.Actuators.Actuator6 * DEG_TO_RAD;
       }
-      current_joint_pos[0] = position_data.Actuators.Actuator1 * DEG_TO_RAD;
-      current_joint_pos[1] = position_data.Actuators.Actuator2 * DEG_TO_RAD;
-      current_joint_pos[2] = position_data.Actuators.Actuator3 * DEG_TO_RAD;
-      current_joint_pos[3] = position_data.Actuators.Actuator4 * DEG_TO_RAD;
-      current_joint_pos[4] = position_data.Actuators.Actuator5 * DEG_TO_RAD;
-      current_joint_pos[5] = position_data.Actuators.Actuator6 * DEG_TO_RAD;
+
       for (unsigned int i = 0; i < NUM_JACO_JOINTS; i++)
       {
         currentPoint = simplify_angle(current_joint_pos[i]);
@@ -852,7 +881,7 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
       }
     }
 
-    //calculate control input
+    //calculate control input - PD control loop
     //populate the velocity command
     trajPoint.Position.Actuators.Actuator1 = (KP * error[0] + KV * (error[0] - prevError[0]) * RAD_TO_DEG);
     trajPoint.Position.Actuators.Actuator2 = (KP * error[1] + KV * (error[1] - prevError[1]) * RAD_TO_DEG);
@@ -864,9 +893,14 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
     //for debugging:
     // cout << "Errors: " << error[0] << ", " << error[1] << ", " << error[2] << ", " << error[3] << ", " << error[4] << ", " << error[5] << endl;
 
-    //send the velocity command
-    executeAngularTrajectoryPoint(trajPoint, true);
+    // Actually send the command off
+    if(sim_flag_){
+      publishJacoPoint2ROSTraj(trajPoint);
 
+    } else {
+      //send the velocity command - to real-robot
+      executeAngularTrajectoryPoint(trajPoint, true);
+    }
     for (unsigned int i = 0; i < NUM_JACO_JOINTS; i++)
     {
       prevError[i] = error[i];
@@ -1162,6 +1196,7 @@ bool JacoArmTrajectoryController::loadParameters(const ros::NodeHandle n)
 void JacoArmTrajectoryController::simJointStatesPubCallback(const sensor_msgs::JointState::ConstPtr& msg)
 {
 
+  // Checks for the order to guarantee what we expect
   /* Assuming this mapping
   34     joint_names.push_back(side_ + "_shoulder_pan_joint"); [0]
   35     joint_names.push_back(side_ + "_shoulder_lift_joint"); [1]
@@ -1170,45 +1205,78 @@ void JacoArmTrajectoryController::simJointStatesPubCallback(const sensor_msgs::J
   38     joint_names.push_back(side_ + "_wrist_2_joint");  [4]
   39     joint_names.push_back(side_ + "_wrist_3_joint");  [5]
 
+  */
 
-  // Store the current joint position (identicle to update)
-  name: ['linear_joint', 'pan_joint', 'right_elbow_joint', 'right_robotiq_85_left_knuckle_joint', 'right_shoulder_lift_joint', 'right_shoulder_pan_joint', 'right_wrist_1_joint', 'right_wrist_2_joint', 'right_wrist_3_joint', 'tilt_joint']
-    shoulder_pan_joint -> 5
-    shoulder_lift_joint -> 4
-    elbow_joint -> 2
-    wrist_1_joint -> 6
-    wrist_2_joint -> 7
-    wrist_3_joint -> 8
+    std::vector<std::string> pub_joint_names = msg->name;
+    // Cycle through the number of JACO joints
+    for (int joint_id = 0; joint_id < NUM_JACO_JOINTS; joint_id++){
 
-    */
-
-    // WARNING: This is currently hardcoded for what the joint state is publishing order
-    // Effort
-    joint_eff_[0] = msg->effort[5]; // shoulder_pan_joint
-    joint_eff_[1] = msg->effort[4]; // shoulder_lift_joint
-    joint_eff_[2] = msg->effort[2]; //elbow_joint 
-    joint_eff_[3] = msg->effort[6]; //wrist_1_joint
-    joint_eff_[4] = msg->effort[7]; //wrist_2_joint
-    joint_eff_[5] = msg->effort[8]; //wrist_3_joint
-
-    // Velocity
-    joint_vel_[0] = msg->velocity[5]; // shoulder_pan_joint
-    joint_vel_[1] = msg->velocity[4]; // shoulder_lift_joint
-    joint_vel_[2] = msg->velocity[2]; //elbow_joint 
-    joint_vel_[3] = msg->velocity[6]; //wrist_1_joint
-    joint_vel_[4] = msg->velocity[7]; //wrist_2_joint
-    joint_vel_[5] = msg->velocity[8]; //wrist_3_joint
-
-    // Position
-    joint_pos_[0] = msg->position[5]; // shoulder_pan_joint
-    joint_pos_[1] = msg->position[4]; // shoulder_lift_joint
-    joint_pos_[2] = msg->position[2]; //elbow_joint 
-    joint_pos_[3] = msg->position[6]; //wrist_1_joint
-    joint_pos_[4] = msg->position[7]; //wrist_2_joint
-    joint_pos_[5] = msg->position[8]; //wrist_3_joint
+      // Find the location of the joint 
+      string joint_name = joint_names[joint_id];
+      int msg_loc = distance(pub_joint_names.begin(), find(pub_joint_names.begin(), pub_joint_names.end(), joint_name));
+    
+      // Pull out joint loc and store
+      joint_eff_[joint_id] = msg->effort[msg_loc];
+      joint_vel_[joint_id] = msg->velocity[msg_loc];
+      joint_pos_[joint_id] = msg->position[msg_loc];
+    }
 }
 
 
+/**
+* Actually publish the command - in case we have custom changes to joint names later..
+**/
+void JacoArmTrajectoryController::publishJacoPoint2ROSTraj(TrajectoryPoint jacoPoint){
+
+    // Convert jacoPoint to ROS trajectory
+    vector<trajectory_msgs::JointTrajectoryPoint> pt_arr = convertJacoPoint2ROSJointTraj(jacoPoint);
+
+    // Populate JointTrajectory depending on cmd msg
+    trajectory_msgs::JointTrajectory jtm;
+    jtm.joint_names = joint_names;
+    jtm.points = pt_arr;
+
+    // Publish command
+    angCmdSimPublisher.publish(jtm);
+}
+
+/**
+* Internal helper command to convert a TrajectoryPoint to ROS JointTrajectoryPoint vector
+*/
+vector<trajectory_msgs::JointTrajectoryPoint> JacoArmTrajectoryController::convertJacoPoint2ROSJointTraj(TrajectoryPoint jacoPoint)
+{
+
+  // Convert jacoPoint
+  // Fields of a point - position (UserPoint)
+  // position - type, delay, CartesianPosition, Actuators, HandMode, Fingers
+
+  // Currently just support arm positions
+  trajectory_msgs::JointTrajectoryPoint jtp;
+  jtp.time_from_start = ros::Duration(1.0);
+ 
+  // Grab values from the actual jacoPoint 
+  vector<double> joint_cmd(6);
+  joint_cmd[0] = jacoPoint.Position.Actuators.Actuator1 * DEG_TO_RAD;
+  joint_cmd[1] = jacoPoint.Position.Actuators.Actuator2 * DEG_TO_RAD;
+  joint_cmd[2] = jacoPoint.Position.Actuators.Actuator3 * DEG_TO_RAD;
+  joint_cmd[3] = jacoPoint.Position.Actuators.Actuator4 * DEG_TO_RAD;
+  joint_cmd[4] = jacoPoint.Position.Actuators.Actuator5 * DEG_TO_RAD;
+  joint_cmd[5] = jacoPoint.Position.Actuators.Actuator6 * DEG_TO_RAD;
+
+  //TODO: This is currently broken! only angular position works in simulation
+  // Check for position vs. velocity
+  if(jacoPoint.Position.Type == ANGULAR_POSITION){
+    jtp.positions = joint_cmd;
+  } else { // velocity control
+    jtp.velocities = joint_cmd;
+  }
+
+  // Store into vector
+  vector<trajectory_msgs::JointTrajectoryPoint> pt_arr(1);
+  pt_arr[0] = jtp;
+  
+  return pt_arr;
+}
 
 /*****************************************/
 /**********  Basic Arm Commands **********/
@@ -1219,72 +1287,46 @@ void JacoArmTrajectoryController::angularCmdCallback(const wpi_jaco_msgs::Angula
   if (eStopEnabled)
     return;
 
-  // Start to check for sim vs. real 
-  if(sim_flag_)
+  // Check if we're in simulation - if not clear the trajectory
+  // and set control type
+  if(!sim_flag_)
   {
-    // Setup msg JointTrajectory for std gazebo ros controller
-    // Populate JointTrajectory depending on cmd msg
-    trajectory_msgs::JointTrajectory jtm;
-    trajectory_msgs::JointTrajectoryPoint jtp;
-    jtm.joint_names = joint_names;
-    jtp.time_from_start = ros::Duration(1.0);
+    //take control of the arm
+    {
+      boost::recursive_mutex::scoped_lock lock(api_mutex);
+      EraseAllTrajectories();
 
-    // Check what kind of command it was 
-    if (msg.armCommand){ 
-      vector<double> joint_cmd(6);
-
-      if (msg.position){
-        // Convert commands
-        for (int i = 0; i < 6; i++){
-          //joint_cmd[i] = nearest_equivalent(simplify_angle(msg.joints[i]), joint_pos_[i]) * RAD_TO_DEG;
-          joint_cmd[i] = nearest_equivalent(simplify_angle(msg.joints[i]), joint_pos_[i]);
-        }
-        // Store away
-        jtp.positions = joint_cmd;
-      } else { // velocity control
-   
-        for (int i = 0; i < 6; i++){
-          joint_cmd[i] = msg.joints[i] * RAD_TO_DEG; 
-        }
-        jtp.velocities = joint_cmd;
+      if (controlType != ANGULAR_CONTROL)
+      {
+        SetAngularControl();
+        controlType = ANGULAR_CONTROL;
       }
     }
-
-    // Store
-    vector<trajectory_msgs::JointTrajectoryPoint> pt_arr(1);
-    pt_arr[0] = jtp;
-    jtm.points = pt_arr;
-
-    // Publish command
-    angCmdSimPublisher.publish(jtm);
-
   }
-  else
-  //take control of the arm
+
+  // Setup custom traj point from Jaco - KinovaTypes.h
+  TrajectoryPoint jacoPoint;
+  jacoPoint.InitStruct();
+
+  //populate arm command
+  if (msg.armCommand)
   {
-    boost::recursive_mutex::scoped_lock lock(api_mutex);
-    EraseAllTrajectories();
+    if (msg.position)
+    {
+      jacoPoint.Position.Type = ANGULAR_POSITION;
+      AngularPosition position_data;
 
-    if (controlType != ANGULAR_CONTROL)
-    {
-      SetAngularControl();
-      controlType = ANGULAR_CONTROL;
-    }
-  
-    // Setup custom traj point from Jaco - KinovaTypes.h
-    TrajectoryPoint jacoPoint;
-    jacoPoint.InitStruct();
-  
-    //populate arm command
-    if (msg.armCommand)
-    {
-      if (msg.position)
+      // Check for the current position of the arm
+      float current_joint_pos[6];
+
+      // If we're in simulation just populate with joint subscriber
+      if (sim_flag_)
       {
-        jacoPoint.Position.Type = ANGULAR_POSITION;
-        AngularPosition position_data;
-
-        // Check for the current position of the arm
-        float current_joint_pos[6];
+        // Store off current joint positions
+        std::copy(joint_pos_.begin(), joint_pos_.end(), current_joint_pos);
+      }
+      else
+      {
         {
           boost::recursive_mutex::scoped_lock lock(api_mutex);
           GetAngularPosition(position_data);
@@ -1295,66 +1337,74 @@ void JacoArmTrajectoryController::angularCmdCallback(const wpi_jaco_msgs::Angula
         current_joint_pos[3] = position_data.Actuators.Actuator4 * DEG_TO_RAD;
         current_joint_pos[4] = position_data.Actuators.Actuator5 * DEG_TO_RAD;
         current_joint_pos[5] = position_data.Actuators.Actuator6 * DEG_TO_RAD;
-
-        jacoPoint.Position.Actuators.Actuator1 = nearest_equivalent(simplify_angle(msg.joints[0]),
-                                                                    current_joint_pos[0]) * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator2 = nearest_equivalent(simplify_angle(msg.joints[1]),
-                                                                    current_joint_pos[1]) * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator3 = nearest_equivalent(simplify_angle(msg.joints[2]),
-                                                                    current_joint_pos[2]) * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator4 = nearest_equivalent(simplify_angle(msg.joints[3]),
-                                                                    current_joint_pos[3]) * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator5 = nearest_equivalent(simplify_angle(msg.joints[4]),
-                                                                    current_joint_pos[4]) * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator6 = nearest_equivalent(simplify_angle(msg.joints[5]),
-                                                                    current_joint_pos[5]) * RAD_TO_DEG;
-      }
-      else
-      {
-        jacoPoint.Position.Type = ANGULAR_VELOCITY;
-        jacoPoint.Position.Actuators.Actuator1 = msg.joints[0] * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator2 = msg.joints[1] * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator3 = msg.joints[2] * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator4 = msg.joints[3] * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator5 = msg.joints[4] * RAD_TO_DEG;
-        jacoPoint.Position.Actuators.Actuator6 = msg.joints[5] * RAD_TO_DEG;
       }
 
-    }
-    else // Finger command
-    {
-      if (msg.position)
-      {
-        fingerPositionControl(msg.fingers[0], msg.fingers[1], msg.fingers[2]);
-        return;
-      }
-      else
-      {
-        jacoPoint.Position.Type = ANGULAR_VELOCITY;
-        jacoPoint.Position.Actuators.Actuator1 = 0.0;
-        jacoPoint.Position.Actuators.Actuator2 = 0.0;
-        jacoPoint.Position.Actuators.Actuator3 = 0.0;
-        jacoPoint.Position.Actuators.Actuator4 = 0.0;
-        jacoPoint.Position.Actuators.Actuator5 = 0.0;
-        jacoPoint.Position.Actuators.Actuator6 = 0.0;
-      }
-    }
-
-    //populate finger command
-    if (msg.fingerCommand)
-    {
-      if (msg.position)
-        jacoPoint.Position.HandMode = POSITION_MODE;
-      else
-        jacoPoint.Position.HandMode = VELOCITY_MODE;
-
-      jacoPoint.Position.Fingers.Finger1 = msg.fingers[0];
-      jacoPoint.Position.Fingers.Finger2 = msg.fingers[1];
-      jacoPoint.Position.Fingers.Finger3 = msg.fingers[2];
+      jacoPoint.Position.Actuators.Actuator1 = nearest_equivalent(simplify_angle(msg.joints[0]),
+                                                                  current_joint_pos[0]) * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator2 = nearest_equivalent(simplify_angle(msg.joints[1]),
+                                                                  current_joint_pos[1]) * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator3 = nearest_equivalent(simplify_angle(msg.joints[2]),
+                                                                  current_joint_pos[2]) * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator4 = nearest_equivalent(simplify_angle(msg.joints[3]),
+                                                                  current_joint_pos[3]) * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator5 = nearest_equivalent(simplify_angle(msg.joints[4]),
+                                                                  current_joint_pos[4]) * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator6 = nearest_equivalent(simplify_angle(msg.joints[5]),
+                                                                  current_joint_pos[5]) * RAD_TO_DEG;
     }
     else
-      jacoPoint.Position.HandMode = HAND_NOMOVEMENT;
+    {
+      jacoPoint.Position.Type = ANGULAR_VELOCITY;
+      jacoPoint.Position.Actuators.Actuator1 = msg.joints[0] * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator2 = msg.joints[1] * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator3 = msg.joints[2] * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator4 = msg.joints[3] * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator5 = msg.joints[4] * RAD_TO_DEG;
+      jacoPoint.Position.Actuators.Actuator6 = msg.joints[5] * RAD_TO_DEG;
+    }
 
+  }
+  else // Finger command
+  {
+    if (msg.position)
+    {
+      fingerPositionControl(msg.fingers[0], msg.fingers[1], msg.fingers[2]);
+      return;
+    }
+    else
+    {
+      jacoPoint.Position.Type = ANGULAR_VELOCITY;
+      jacoPoint.Position.Actuators.Actuator1 = 0.0;
+      jacoPoint.Position.Actuators.Actuator2 = 0.0;
+      jacoPoint.Position.Actuators.Actuator3 = 0.0;
+      jacoPoint.Position.Actuators.Actuator4 = 0.0;
+      jacoPoint.Position.Actuators.Actuator5 = 0.0;
+      jacoPoint.Position.Actuators.Actuator6 = 0.0;
+    }
+  }
+
+  //populate finger command
+  if (msg.fingerCommand)
+  {
+    if (msg.position)
+      jacoPoint.Position.HandMode = POSITION_MODE;
+    else
+      jacoPoint.Position.HandMode = VELOCITY_MODE;
+
+    jacoPoint.Position.Fingers.Finger1 = msg.fingers[0];
+    jacoPoint.Position.Fingers.Finger2 = msg.fingers[1];
+    jacoPoint.Position.Fingers.Finger3 = msg.fingers[2];
+  }
+  else
+    jacoPoint.Position.HandMode = HAND_NOMOVEMENT;
+
+
+  // Check if we're in simulation
+  if(sim_flag_){
+
+    publishJacoPoint2ROSTraj(jacoPoint);
+ 
+  } else{ 
     //send command
     if (msg.position)
     {
@@ -1378,8 +1428,11 @@ void JacoArmTrajectoryController::angularCmdCallback(const wpi_jaco_msgs::Angula
       else
         SendBasicTrajectory(jacoPoint);
     }
-  }
+  } 
 }
+
+
+
 
 void JacoArmTrajectoryController::cartesianCmdCallback(const wpi_jaco_msgs::CartesianCommand& msg)
 {
@@ -1711,3 +1764,4 @@ int main(int argc, char** argv)
   jaco::JacoArmTrajectoryController robot(nh, pnh);
   ros::spin();
 }
+

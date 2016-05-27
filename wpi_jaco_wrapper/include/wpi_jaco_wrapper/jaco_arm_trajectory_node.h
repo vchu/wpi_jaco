@@ -230,6 +230,20 @@ private:
   */
   bool eraseTrajectoriesCallback(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res);
 
+  /**
+  * \brief Simple internal command to convert Kinova TrajectoryPoints to ROS JointTrajectoryPoint vector array
+  *
+  * @param TrajectoryPoint pt
+  */
+  std::vector<trajectory_msgs::JointTrajectoryPoint> convertJacoPoint2ROSJointTraj(TrajectoryPoint jacoPoint);
+
+  /**
+  * \brief Simple internal command to convert Kinova TrajectoryPoints to ROS JointTrajectoryPoint vector array
+  *
+  * @param TrajectoryPoint pt
+  */
+  void publishJacoPoint2ROSTraj(TrajectoryPoint jacoPoint);
+
   // Messages
   ros::Publisher joint_state_pub_; //!< publisher for joint states
   ros::Publisher cartesianCmdPublisher; //!< publisher for Cartesian arm commands
