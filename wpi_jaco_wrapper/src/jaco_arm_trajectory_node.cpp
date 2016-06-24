@@ -120,6 +120,7 @@ JacoArmTrajectoryController::JacoArmTrajectoryController(ros::NodeHandle nh, ros
     // Instead we want to subscribe to the joint_state topic being published by gazebo
     joint_state_sub = nh.subscribe("joint_states", 1, &JacoArmTrajectoryController::simJointStatesPubCallback, this);
     angCmdSimPublisher = nh.advertise<trajectory_msgs::JointTrajectory>("/vector/"+ side_ +"_arm/command", 1);
+    velCmdSimPublisher = nh.advertise<trajectory_msgs::JointTrajectory>("/vector/"+ side_ +"_arm_vel/command", 1);
 
   }
 
@@ -838,6 +839,23 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
         totalError += fabs(error[i]);
       }
 
+      if (sim_flag_){
+          double simError = 0.0;
+          for (unsigned int i = 0; i < NUM_JACO_JOINTS; i++)
+          {
+            simError += (prevError[i]-error[i]);
+          }
+          if (simError < 0.001 && totalError < 0.08){
+            printf ("t: %4.2f\n", t);
+            if (totalError < .08){
+              trajectoryComplete = true;
+              ROS_INFO("Trajectory complete!");
+              break;
+            }
+          }
+        
+      }
+      // Check if we should stop executing
       if (totalError < .03)
       {
         if (!sim_flag_){ // stop gripper?
@@ -891,7 +909,7 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
     trajPoint.Position.Actuators.Actuator6 = (KP * error[5] + KV * (error[5] - prevError[5]) * RAD_TO_DEG);
 
     //for debugging:
-    // cout << "Errors: " << error[0] << ", " << error[1] << ", " << error[2] << ", " << error[3] << ", " << error[4] << ", " << error[5] << endl;
+    // cout << "Errors: " << error[0] << ", " << error[1] << ", " << error[2] << ", " << error[3] << ", " << error[4] << ", " << error[5] << ", " << totalError << endl;
 
     // Actually send the command off
     if(sim_flag_){
@@ -901,6 +919,7 @@ void JacoArmTrajectoryController::execute_joint_trajectory(const control_msgs::F
       //send the velocity command - to real-robot
       executeAngularTrajectoryPoint(trajPoint, true);
     }
+
     for (unsigned int i = 0; i < NUM_JACO_JOINTS; i++)
     {
       prevError[i] = error[i];
@@ -1237,7 +1256,12 @@ void JacoArmTrajectoryController::publishJacoPoint2ROSTraj(TrajectoryPoint jacoP
     jtm.points = pt_arr;
 
     // Publish command
-    angCmdSimPublisher.publish(jtm);
+    // Check what kind of command we're publishing - position or velocity
+    if(jacoPoint.Position.Type == ANGULAR_POSITION){
+      angCmdSimPublisher.publish(jtm);
+    } else { // velocity control
+      velCmdSimPublisher.publish(jtm);
+    }
 }
 
 /**

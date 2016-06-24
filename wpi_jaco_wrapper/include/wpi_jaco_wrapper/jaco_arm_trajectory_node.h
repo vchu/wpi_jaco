@@ -250,6 +250,7 @@ private:
   ros::Publisher angularCmdPublisher; //!< publisher for angular arm commands
   ros::Publisher armHomedPublisher; //!< publisher for when the arm completes a kinova api home arm action
   ros::Publisher angCmdSimPublisher; //!< publisher for simulation argular arm commands
+  ros::Publisher velCmdSimPublisher; //!< publisher for simulation velocity arm commands
   ros::Subscriber cartesianCmdSubscriber; //!< subscriber for Cartesian arm commands
   ros::Subscriber angularCmdSubscriber; //!< subscriber for angular arm commands
   ros::Subscriber joint_state_sub; //!< subscriber for joint states from simulation
